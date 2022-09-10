@@ -2,6 +2,7 @@ package com.worekleszczy.zookeeper
 
 import cats.effect.std.{Dispatcher, Queue}
 import cats.effect.{Deferred, IO, IOApp, Resource}
+import com.worekleszczy.zookeeper.config.ZookeeperConfig
 import fs2._
 import org.apache.zookeeper.AsyncCallback.Children2Callback
 import org.apache.zookeeper.{WatchedEvent, Watcher, ZooKeeper}
@@ -12,7 +13,7 @@ import org.typelevel.log4cats.syntax._
 import scala.concurrent.duration.{FiniteDuration, _}
 import scala.jdk.CollectionConverters._
 
-case class ZookeeperConfig(host: String, timeout: FiniteDuration, applicationNode: String)
+//case class ZookeeperConfig(host: String, timeout: FiniteDuration, applicationNode: String)
 
 object Main extends IOApp.Simple {
 
@@ -62,7 +63,7 @@ object Main extends IOApp.Simple {
     }
   }
 
-  def config: Resource[IO, ZookeeperConfig] = Resource.pure(ZookeeperConfig("localhost:2181", 3.seconds, "/bacchus"))
+  def config: Resource[IO, ZookeeperConfig] = ???
 
   def queue: Resource[IO, Queue[IO, WatchedEvent]] = Resource.eval(Queue.unbounded[IO, WatchedEvent])
 

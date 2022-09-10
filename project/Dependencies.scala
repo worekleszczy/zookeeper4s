@@ -9,6 +9,7 @@ object Dependencies {
     val testcontainers = "1.17.1"
     val log4cats       = "2.3.1"
     val logback        = "1.3.0-alpha16"
+    val tagging        = "2.3.3"
   }
 
   val catsEffect = Seq(
@@ -41,5 +42,9 @@ object Dependencies {
   )
   val logback = Seq(
     "ch.qos.logback" % "logback-classic" % v.logback
+  )
+
+  val tagging = Seq(
+    "com.softwaremill.common" %% "tagging" % v.tagging
   )
 }

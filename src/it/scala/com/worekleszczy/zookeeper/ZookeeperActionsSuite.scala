@@ -11,7 +11,7 @@ import scala.jdk.CollectionConverters._
 
 class ZookeeperActionsSuite extends CatsEffectSuite {
 
-  private final class ZooKeeperContainer extends GenericContainer[ZooKeeperContainer]("zookeeper:3.8.0")
+  final class ZooKeeperContainer extends GenericContainer[ZooKeeperContainer]("zookeeper:3.8.0")
 
   implicit val logger: Logger[IO] = Slf4jLogger.getLogger[IO]
 
