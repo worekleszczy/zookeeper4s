@@ -1,6 +1,5 @@
 package com.worekleszczy.zookeeper
 
-import cats.Monad
 import cats.effect._
 import cats.effect.kernel.Resource
 import cats.effect.std.Dispatcher
@@ -81,7 +80,7 @@ object Zookeeper {
     Resource
       .make[F, ZookeeperLive[F]] {
         Sync[F].delay {
-          new ZookeeperLive(new AZooKeeper(config.host, config.timeout.toMillis.toInt, watcher), dispatcher)
+          new ZookeeperLive(new AZooKeeper(config.host, config.timeout.toMillis.toInt, watcher), dispatcher, config)
         }
       }(_.close)
       .widen[Zookeeper[F]]
@@ -91,8 +90,11 @@ object Zookeeper {
     watcher: AWatcher = noopWatcher
   ): Resource[F, Zookeeper[F]] = Dispatcher[F].flatMap(apply(config, _, watcher))
 
-  private final class ZookeeperLive[F[_]: Async](val underlying: AZooKeeper, dispatcher: Dispatcher[F])
-      extends Zookeeper[F] {
+  private final class ZookeeperLive[F[_]: Async](
+    underlying: AZooKeeper,
+    dispatcher: Dispatcher[F],
+    config: ZookeeperConfig
+  ) extends Zookeeper[F] {
 
     def watch(path: Path): F[Array[Byte]] = ???
 
@@ -106,13 +108,15 @@ object Zookeeper {
       watch: Option[WatchType[F]]
     ): F[(Int @@ ResultCode, Path, Context, Vector[Path], Stat)] = {
 
+      val rebasedPath = path.rebase(config.root)
+
       Async[F].async_[(Int @@ ResultCode, Path, Context, Vector[Path], Stat)] { callback =>
         val cb: Children2Callback = (rc, rawPath, context, childrenRaw, stat) => {
 
           context match {
             case c: Context =>
               val path: Path             = Path.unsafeFromString(rawPath)
-              val children: Vector[Path] = childrenRaw.asScala.to(Vector).map(Path.unsafeFromString)
+              val children: Vector[Path] = childrenRaw.asScala.to(Vector).map(p => Path.unsafeFromString(s"/$p"))
 
               callback(Right((rc.taggedWith[ResultCode], path, c, children, stat)))
 
@@ -121,13 +125,13 @@ object Zookeeper {
         }
 
         watch match {
-          case Some(WatchType.DefaultWatcher) => underlying.getChildren(path.toString, true, cb, ())
+          case Some(WatchType.DefaultWatcher) => underlying.getChildren(rebasedPath.raw, true, cb, Context.Empty)
           case Some(WatchType.SingleWatcher(watcher)) =>
             val unsafeWatcher: AWatcher = event => dispatcher.unsafeRunAndForget(watcher.process(event))
 
-            underlying.getChildren(path.toString, unsafeWatcher, cb, ())
+            underlying.getChildren(rebasedPath.raw, unsafeWatcher, cb, Context.Empty)
 
-          case None => underlying.getChildren(path.toString, false, cb, ())
+          case None => underlying.getChildren(rebasedPath.raw, false, cb, Context.Empty)
         }
       }
 

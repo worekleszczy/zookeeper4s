@@ -1,30 +1,45 @@
 package com.worekleszczy.zookeeper.model
-import java.nio.file.Files
 import java.nio.file.{Paths, Path => JPAth}
-import scala.util.Try
+import scala.util._
+import scala.util.control.NoStackTrace
 
 sealed trait Path extends Any {
   def parent: Path
   def name: String
-  def absolutePathRaw: String
+  def raw: String
+
+  def rebase(newRoot: Path): Path
+
+  private[model] def value: JPAth
 }
 
-private final class PathImpl(private val value: JPAth) extends Path {
-  def parent: Path = new PathImpl(value.getParent)
+private[model] final class PathImpl(private[model] val value: JPAth) extends Path {
+  def parent: Path = new PathImpl(value.getParent.normalize())
 
   def name: String = value.getFileName.toString
 
-  def absolutePathRaw: String = value.toString
+  def raw: String = value.toString
+
+  def rebase(r: Path): Path =
+    r match {
+      case newRoot: PathImpl =>
+        new PathImpl(newRoot.value.resolve(value.toString.substring(1)).normalize())
+    }
+
 }
 
 object Path {
 
-  def apply(raw: String): Option[Path] = {
-    Try {
-      val path = Paths.get(raw).toAbsolutePath
-      new PathImpl(path)
-    }.toOption
+  final case class InvalidPathException(path: String) extends RuntimeException with NoStackTrace {
+    override lazy val getMessage: String = s"Path $path is invalid"
   }
 
-  def unsafeFromString(raw: String): Path = apply(raw).getOrElse(throw new RuntimeException(s"Illegal path $raw"))
+  def apply(raw: String): Try[Path] =
+    Try(Paths.get(raw)).flatMap { path =>
+      if (path.isAbsolute) {
+        Success(new PathImpl(path.normalize()))
+      } else Failure(new InvalidPathException(raw))
+    }
+
+  def unsafeFromString(raw: String): Path = apply(raw).get
 }
