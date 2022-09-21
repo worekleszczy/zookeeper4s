@@ -59,8 +59,8 @@ inThisBuild(
 )
 val It = config("it").extend(Test)
 
-addCompilerPlugin("org.typelevel" % "kind-projector" % "0.13.2" cross CrossVersion.full)
-addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1")
+addCompilerPlugin("org.typelevel" % "kind-projector"     % "0.13.2" cross CrossVersion.full)
+addCompilerPlugin("com.olegpy"   %% "better-monadic-for" % "0.3.1")
 
 lazy val root = (project in file("."))
   .overrideConfigs(It)
@@ -68,7 +68,7 @@ lazy val root = (project in file("."))
     inConfig(It)(Defaults.testSettings),
     It / fork := true,
     name := "zookeeper4s",
-    version := "0.1.0-SNAPSHOT",
+    version := "0.1.0",
     publishConfiguration := publishConfiguration.value.withOverwrite(true),
     libraryDependencies ++= catsEffect ++ zookeeper ++ testContainers ++ log4cats ++ logback ++ fs2 ++ tagging ++ scodec
   )
