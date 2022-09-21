@@ -28,14 +28,16 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
 
   implicit val logger: Logger[IO] = Slf4jLogger.getLogger[IO]
 
-  private val startZookeeperResource = debug"Start zookeeper" >> IO {
+  private val startZookeeperResource = info"Start zookeeper" >> IO {
     val container = new ZooKeeperContainer().withExposedPorts(2181)
     container.start()
     container
+  }.flatTap { container =>
+    IO.fromTry(Try(container.getMappedPort(2181))).flatMap(port => info"Container exposed port: $port")
   }
 
   def stopZookeeper(container: ZooKeeperContainer): IO[Unit] =
-    debug"Stopping zookeeper" *> IO {
+    info"Stopping zookeeper" *> IO {
       container.stop()
     }
 
@@ -47,9 +49,8 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
     container: ZooKeeperContainer = zookeeperContainer()
   ): Resource[IO, (ZookeeperLive[IO], String)] =
     for {
-      exposed <-
-        (IO.fromTry(Try(container.getMappedPort(2181))).flatTap(exposed => info"Exposed port: $exposed")).toResource
-      id <- UUIDGen[IO].randomUUID.toResource
+      exposed <- (IO.fromTry(Try(container.getMappedPort(2181)))).toResource
+      id      <- UUIDGen[IO].randomUUID.toResource
       config <-
         ZookeeperConfig
           .create[IO](Path.unsafeAsAbsolutePath(id.toString), "localhost", exposed, 10.seconds, true, true)

@@ -174,10 +174,10 @@ class PathTest extends FunSuite {
   }
 
   test("should have level 1 for node under root") {
-    assertEquals(Path.unsafeFromString("/test-1").level ,1 )
+    assertEquals(Path.unsafeFromString("/test-1").level, 1)
   }
 
   test("should have level 1 for node under root with trailing slash") {
-    assertEquals(Path.unsafeFromString("/test-1/").level ,1 )
+    assertEquals(Path.unsafeFromString("/test-1/").level, 1)
   }
 }

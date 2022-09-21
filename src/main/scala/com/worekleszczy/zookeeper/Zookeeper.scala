@@ -148,7 +148,7 @@ object Zookeeper {
         for {
           rootStats <- exists(Path.root, watch = false).rethrow
           _         <- info"Deleting root path ${config.root.raw}"
-          _         <- rootStats.map(stats => deleteRecursive(Path.root).rethrow).sequence_
+          _         <- rootStats.map(_ => deleteRecursive(Path.root).rethrow).sequence_
         } yield ()
       } else Async[F].unit
 
@@ -342,7 +342,7 @@ object Zookeeper {
       val transformed = if (relative) rebaseOnRoot(path) else path
 
       Async[F].async_[Result[Option[Stat]]] { callback =>
-        val cb: StatCallback = (rc, passed, context, stat) => {
+        val cb: StatCallback = (rc, _, context, stat) => {
 
           callback(
             Context
