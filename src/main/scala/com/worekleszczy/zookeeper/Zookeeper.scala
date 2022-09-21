@@ -15,7 +15,7 @@ import cats.{Applicative, MonadError}
 import com.worekleszczy.zookeeper.Zookeeper.Result
 import com.worekleszczy.zookeeper.codec.ByteCodec
 import com.worekleszczy.zookeeper.config.ZookeeperConfig
-import com.worekleszczy.zookeeper.model.Path
+import com.worekleszczy.zookeeper.model.{Path, SequentialContext}
 import org.apache.zookeeper.AsyncCallback._
 import org.apache.zookeeper.ZooDefs.Ids
 import org.apache.zookeeper.data.Stat
@@ -25,6 +25,7 @@ import org.typelevel.log4cats.syntax._
 
 import scala.jdk.CollectionConverters._
 import scala.util._
+import scala.util.chaining._
 import scala.util.control.NoStackTrace
 
 trait Zookeeper[F[_]] {
@@ -87,7 +88,9 @@ object Zookeeper {
 
   sealed trait Error extends RuntimeException with NoStackTrace
 
-  case class ZookeeperClientError(code: KeeperException.Code) extends Error
+  case class ZookeeperClientError(code: KeeperException.Code) extends Error {
+    override def getMessage: String = s"Error $code occurred"
+  }
 
   case object DecodeError extends Error
 
@@ -142,6 +145,8 @@ object Zookeeper {
     config: ZookeeperConfig
   ) extends Zookeeper[F] {
 
+    private final val serialSeparator = ':'
+
     private[zookeeper] def close: F[Unit] = {
 
       val removeRoot = if (config.removeRootOnExit) {
@@ -167,23 +172,27 @@ object Zookeeper {
       val transformed = if (relative) rebaseOnRoot(path) else path
 
       Async[F].async_[Result[(Vector[Path], Stat)]] { callback =>
-        val cb: Children2Callback = (rc, _, context, childrenRaw, stat) => {
+        val cb: Children2Callback = (rc, baseRaw, context, childrenRaw, stat) => {
 
           callback(
             Context
               .decode(context)
               .map { _ =>
                 onSuccess(rc) {
-                  val childrenTransformation: String => Path =
-                    if (relative) (Path.unsafeAsAbsolutePath _) andThen (_.stripBase(config.root))
-                    else Path.unsafeAsAbsolutePath
 
-                  val children: Vector[Path] =
+                  val base = Path.unsafeFromString(baseRaw)
+
+                  val childrenTransformation: Path => Path =
+                    if (relative) (readPathName _) andThen (_.stripBase(config.root))
+                    else readPathName
+
+                  (
                     childrenRaw.asScala
                       .to(Vector)
-                      .map(childrenTransformation)
+                      .map(child => childrenTransformation(base.resolve(child))),
+                    stat
+                  ).asRight
 
-                  (children, stat).asRight
                 }
 
               }
@@ -211,7 +220,7 @@ object Zookeeper {
 
     def getData[T: ByteCodec](path: Path, watch: Option[WatchType[F]]): F[Either[Error, (T, Stat)]] = {
 
-      val transformedPath = rebaseOnRoot(path)
+      val absolutePath = rebaseOnRoot(path)
       Async[F]
         .async_[(Either[Error, (T, Stat)])] { callback =>
           val cb: DataCallback = (_, _, context, data, stat) => {
@@ -230,9 +239,9 @@ object Zookeeper {
             case Some(WatchType.SingleWatcher(watcher)) =>
               val unsafeWatcher: AWatcher = event => dispatcher.unsafeRunAndForget(watcher.process(event))
 
-              underlying.getData(transformedPath.raw, unsafeWatcher, cb, Context.Empty)
-            case Some(WatchType.DefaultWatcher) => underlying.getData(transformedPath.raw, true, cb, Context.Empty)
-            case None                           => underlying.getData(transformedPath.raw, false, cb, Context.Empty)
+              underlying.getData(absolutePath.raw, unsafeWatcher, cb, Context.Empty)
+            case Some(WatchType.DefaultWatcher) => underlying.getData(absolutePath.raw, true, cb, Context.Empty)
+            case None                           => underlying.getData(absolutePath.raw, false, cb, Context.Empty)
           }
         }
     }
@@ -243,23 +252,34 @@ object Zookeeper {
       mode: CreateMode,
       relative: Boolean
     ): F[Result[(Path, Stat)]] = {
-      val transformedPath = if (relative) rebaseOnRoot(path) else path
+      val absolutePath = (if (relative) rebaseOnRoot(path) else path)
+        .pipe { abs =>
+          mode match {
+            case CreateMode.EPHEMERAL_SEQUENTIAL | CreateMode.PERSISTENT_SEQUENTIAL |
+                CreateMode.PERSISTENT_SEQUENTIAL_WITH_TTL =>
+              abs.transformFileName(_ + serialSeparator)
+            case _ => abs
+          }
+
+        }
+
       Async[F]
         .async_[Result[(Path, Stat)]] { callback =>
-          val cb: Create2Callback = (rc, submittedPath, context, name, stat) => {
+          val cb: Create2Callback = (rc, _, context, name, stat) => {
             val result = Context
               .decode(context)
               .map { _ =>
                 onSuccess(rc) {
-                  val path = Path.unsafeFromPathAndName(submittedPath, name)
-                  (if (relative) path.stripBase(config.root) else path, stat).asRight[Error]
+                  readPathName(Path.unsafeFromString(name)).pipe { path =>
+                    (if (relative) path.stripBase(config.root) else path, stat).asRight[Error]
+                  }
                 }
               }
               .toEither
 
             callback(result)
           }
-          underlying.create(transformedPath.raw, data, Ids.OPEN_ACL_UNSAFE, mode, cb, Context.Empty)
+          underlying.create(absolutePath.raw, data, Ids.OPEN_ACL_UNSAFE, mode, cb, Context.Empty)
         }
     }
 
@@ -273,7 +293,7 @@ object Zookeeper {
       } yield result
 
     def delete(path: Path, version: Int): F[Result[Unit]] = {
-      val transformedPath = rebaseOnRoot(path)
+      val absolutePath = rebaseOnRoot(path)
       Async[F]
         .async_[Result[Unit]] { callback =>
           val cb: VoidCallback = (rc, _, context) => {
@@ -286,13 +306,13 @@ object Zookeeper {
 
             callback(result)
           }
-          underlying.delete(transformedPath.raw, version, cb, Context.Empty)
+          underlying.delete(absolutePath.raw, version, cb, Context.Empty)
         }
 
     }
 
     def deleteRecursive(path: Path): F[Result[Unit]] = {
-      val transformedPath = rebaseOnRoot(path)
+      val absolutePath = rebaseOnRoot(path)
       Async[F]
         .async_[Result[Unit]] { callback =>
           val cb: VoidCallback = (rc, _, context) => {
@@ -306,13 +326,13 @@ object Zookeeper {
             callback(result)
           }
 
-          ZKUtil.deleteRecursive(underlying, transformedPath.raw, cb, Context.Empty)
+          ZKUtil.deleteRecursive(underlying, absolutePath.raw, cb, Context.Empty)
         }
 
     }
 
     def setData(path: Path, body: Array[Byte], version: Int): F[Result[Stat]] = {
-      val transformedPath = rebaseOnRoot(path)
+      val absolutePath = rebaseOnRoot(path)
       Async[F]
         .async_[Result[Stat]] { callback =>
           val cb: StatCallback = (rc, _, context, stat) => {
@@ -326,7 +346,7 @@ object Zookeeper {
             callback(result)
           }
 
-          underlying.setData(transformedPath.raw, body, version, cb, Context.Empty)
+          underlying.setData(absolutePath.raw, body, version, cb, Context.Empty)
         }
     }
 
@@ -379,12 +399,23 @@ object Zookeeper {
 
     private def rebaseOnRoot(path: Path): Path = path.rebase(config.root)
 
-    private def onSuccess[T](rc: Int)(success: => Either[Error, T]): Either[Error, T] =
+    private def readPathName(path: Path): Path =
+      path.extractSequential {
+        _.split(serialSeparator) match {
+          case Array(name, serial) => serial.toLongOption.map(value => SequentialContext(name, value))
+          case _                   => None
+
+        }
+
+      }
+
+    private def onSuccess[T](rc: Int)(success: => Either[Error, T]): Either[Error, T] = {
       KeeperException.Code.get(rc) match {
         case KeeperException.Code.OK =>
           success
         case other =>
           ZookeeperClientError(other).asLeft[T].leftWiden[Error]
       }
+    }
   }
 }

@@ -1,6 +1,6 @@
 package com.worekleszczy.zookeeper.model
 
-import com.worekleszczy.zookeeper.model.Path.{InvalidPathException, InvalidSequentialNumber, PathPrefixException}
+import com.worekleszczy.zookeeper.model.Path.InvalidPathException
 import munit.FunSuite
 
 class PathTest extends FunSuite {
@@ -99,31 +99,31 @@ class PathTest extends FunSuite {
     assertEquals(result.sequential, None)
 
   }
-  /*
-    Path: /bacchus/another_bites
-    Name: /bacchus/another_bites0000000027
-   */
-  test("should extract sequential number if name starts with a path") {
+//  /*
+//    Path: /bacchus/another_bites
+//    Name: /bacchus/another_bites0000000027
+//   */
+//  test("should extract sequential number if name starts with a path") {
+//
+//    val path = Path.fromPathAndName("/bacchus/another_bites", "/bacchus/another_bites0000000027").get
+//
+//    assertEquals(path.value.toString, "/bacchus/another_bites0000000027")
+//    assertEquals(path.sequential, Some(27L))
+//  }
+//
+//  test("should fail if name does not stars with a path") {
+//
+//    val path = Path.fromPathAndName("/bacchus/other", "/bacchus/another_bites0000000027")
+//
+//    assertEquals(path.failed.get, PathPrefixException("/bacchus/other", "/bacchus/another_bites0000000027"))
+//  }
 
-    val path = Path.fromPathAndName("/bacchus/another_bites", "/bacchus/another_bites0000000027").get
-
-    assertEquals(path.value.toString, "/bacchus/another_bites0000000027")
-    assertEquals(path.sequential, Some(27L))
-  }
-
-  test("should fail if name does not stars with a path") {
-
-    val path = Path.fromPathAndName("/bacchus/other", "/bacchus/another_bites0000000027")
-
-    assertEquals(path.failed.get, PathPrefixException("/bacchus/other", "/bacchus/another_bites0000000027"))
-  }
-
-  test("should fail if serial is not a number") {
-
-    val path = Path.fromPathAndName("/bacchus/another_bites", "/bacchus/another_bitesxoxoxox")
-
-    assertEquals(path.failed.get, InvalidSequentialNumber("xoxoxox"))
-  }
+//  test("should fail if serial is not a number") {
+//
+//    val path = Path.fromPathAndName("/bacchus/another_bites", "/bacchus/another_bitesxoxoxox")
+//
+//    assertEquals(path.failed.get, InvalidSequentialNumber("xoxoxox"))
+//  }
 
   test("should strip base of path") {
 
@@ -139,11 +139,11 @@ class PathTest extends FunSuite {
   test("should keep sequential number when stripping base of path") {
 
     val base         = Path.unsafeFromString("/bacchus")
-    val prefixedPath = Path.apply("/bacchus/another_bites10000", 10000L).get
+    val prefixedPath = Path.apply("/bacchus/another:10000", SequentialContext("another", 10000L)).get
 
     val result = prefixedPath.stripBase(base)
 
-    assertEquals(result.value.toString, "/another_bites10000")
+    assertEquals(result.value.toString, "/another:10000")
     assertEquals(result.sequential, Some(10000L))
   }
 
@@ -180,4 +180,60 @@ class PathTest extends FunSuite {
   test("should have level 1 for node under root with trailing slash") {
     assertEquals(Path.unsafeFromString("/test-1/").level, 1)
   }
+
+  test("should transform path name") {
+
+    val sequentialContext = SequentialContext("name", 100)
+
+    val base   = Path("/bacchus/test-1/", sequentialContext).get
+    val result = base.transformFileName(_ + ":")
+    assertEquals(result.name, "test-1:")
+    assertEquals(result.sequential, None)
+  }
+
+  test("should resolve child name") {
+    val sequentialContext = SequentialContext("name", 100)
+
+    val base   = Path("/bacchus/test-1/", sequentialContext).get
+    val result = base.resolve("inner")
+    assertEquals(result.raw, "/bacchus/test-1/inner")
+    assertEquals(result.sequential, None)
+  }
+
+  test("should resolve child if it starts with slash") {
+    val base   = Path("/bacchus/test-1/", SequentialContext("name", 100)).get
+    val result = base.resolve("/inner")
+    assertEquals(result.raw, "/bacchus/test-1/inner")
+    assertEquals(result.sequential, None)
+  }
+
+  test("should resolve child if it starts and ends with slash") {
+    val base   = Path("/bacchus/test-1/", SequentialContext("name", 100)).get
+    val result = base.resolve("/inner/")
+    assertEquals(result.raw, "/bacchus/test-1/inner")
+    assertEquals(result.sequential, None)
+  }
+
+  test("should extract sequential from name") {
+    val base = Path("/bacchus/test_1000").get
+    val result = base.extractSequential(_.split('_') match {
+      case Array(name, seq) => seq.toLongOption.map(SequentialContext(name, _))
+      case _                => None
+    })
+
+    assertEquals(result.raw, "/bacchus/test_1000")
+    assertEquals(result.sequential, Some(1000L))
+    assertEquals(result.name, "test")
+  }
+
+  test("should not extract sequential from name") {
+    val base = Path("/bacchus/test:1000").get
+    val result = base.extractSequential(_.split('_') match {
+      case Array(name, seq) => seq.toLongOption.map(SequentialContext(name, _))
+      case _                => None
+    })
+    assertEquals(result.raw, "/bacchus/test:1000")
+    assertEquals(result.sequential, None)
+  }
+
 }

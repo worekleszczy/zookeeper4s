@@ -1,14 +1,15 @@
 package com.worekleszczy.zookeeper.model
 import java.nio.file.{Paths, Path => JPAth}
 import scala.util._
+import scala.util.chaining._
 import scala.util.control.NoStackTrace
 
 sealed trait Path extends Any {
   def parent: Path
 
   def sequential: Option[Long]
-  final def name: String = value.getFileName.toString
-  final def raw: String  = value.toString
+  def name: String
+  final def raw: String = value.toString
 
   final def level: Int = {
     if (raw == "/") 0 else raw.count(_ == '/')
@@ -18,25 +19,56 @@ sealed trait Path extends Any {
 
   def stripBase(base: Path): Path
 
+  /**
+    * Transforms current file name. If path had associated any sequential number it's lost
+    * @param func function transforming current file name
+    * @return
+    */
+  def transformFileName(func: String => String): Path
+
+  def extractSequential(func: String => Option[SequentialContext]): Path
+
+//  def extractSequentialWithSeparator(separator: Char): Path
+
+  def resolve(value: String): Path
+
   private[model] def value: JPAth
 }
+case class SequentialContext(nameOnly: String, sequential: Long)
 
-private[model] final case class PathImpl(private[model] val value: JPAth, val sequential: Option[Long]) extends Path {
+private[model] final case class PathImpl(
+  private[model] val value: JPAth,
+  private[model] val sequentialContext: Option[SequentialContext]
+) extends Path {
+
+  def name: String = sequentialContext.map(_.nameOnly).getOrElse(value.getFileName.toString)
+
   def parent: Path = PathImpl(value.getParent.normalize(), None)
 
+  def sequential: Option[Long] = sequentialContext.map(_.sequential)
+
   def rebase(root: Path): Path =
-    PathImpl(root.value.resolve(value.toString.substring(1)).normalize(), sequential)
+    copy(value = root.value.resolve(value.toString.substring(1)).normalize())
 
   def stripBase(base: Path): Path = {
 
     if (base.raw == "/") {
       this
-    } else PathImpl(Paths.get(raw.stripPrefix(base.raw)), sequential)
+    } else copy(value = Paths.get(raw.stripPrefix(base.raw)))
 
   }
 
-  override lazy val toString = s"Path(${value.toString}, $sequential)"
+  def extractSequential(func: String => Option[SequentialContext]): Path = copy(sequentialContext = func(name))
 
+  def resolve(child: String): Path = {
+    (if (child.startsWith("/")) child.substring(1) else child).pipe(x => PathImpl(value.resolve(x).normalize(), None))
+
+  }
+
+  def transformFileName(func: String => String): Path =
+    PathImpl(value.getParent.resolve(func(value.getFileName.toString)), None)
+
+  override lazy val toString = s"Path(${value.toString}, $sequential)"
 }
 
 object Path {
@@ -64,10 +96,10 @@ object Path {
       } else Failure(InvalidPathException(raw))
     }
 
-  def apply(raw: String, sequential: Long): Try[Path] =
+  def apply(raw: String, sequentialContext: SequentialContext): Try[Path] =
     Try(Paths.get(raw)).flatMap { path =>
       if (path.isAbsolute) {
-        Success(PathImpl(path.normalize(), Some(sequential)))
+        Success(PathImpl(path.normalize(), Some(sequentialContext)))
       } else Failure(InvalidPathException(raw))
     }
 
@@ -80,21 +112,4 @@ object Path {
 
   def unsafeAsAbsolutePath(raw: String): Path = asAbsolutePath(raw).get
 
-  /*
-    Path: /bacchus/another_bites
-    Name: /bacchus/another_bites0000000027
-   */
-  def fromPathAndName(path: String, name: String): Try[Path] = {
-
-    if (name.startsWith(path)) {
-      val sequential = name.substring(path.length)
-
-      if (sequential.nonEmpty) {
-        sequential.toLongOption.fold[Try[Path]](Failure(InvalidSequentialNumber(sequential)))(apply(name, _))
-      } else apply(path)
-    } else Failure(PathPrefixException(path, name))
-
-  }
-
-  def unsafeFromPathAndName(path: String, name: String): Path = fromPathAndName(path, name).get
 }
