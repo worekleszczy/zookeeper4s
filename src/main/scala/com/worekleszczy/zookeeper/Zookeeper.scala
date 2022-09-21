@@ -1,6 +1,5 @@
 package com.worekleszczy.zookeeper
 
-import cats.MonadError
 import cats.data.EitherT
 import cats.effect._
 import cats.effect.kernel.Resource
@@ -8,9 +7,11 @@ import cats.effect.std.Dispatcher
 import cats.syntax.bifunctor._
 import cats.syntax.either._
 import cats.syntax.flatMap._
+import cats.syntax.foldable._
 import cats.syntax.functor._
 import cats.syntax.monadError._
 import cats.syntax.option._
+import cats.{Applicative, MonadError}
 import com.worekleszczy.zookeeper.Zookeeper.Result
 import com.worekleszczy.zookeeper.codec.ByteCodec
 import com.worekleszczy.zookeeper.config.ZookeeperConfig
@@ -18,8 +19,9 @@ import com.worekleszczy.zookeeper.model.Path
 import org.apache.zookeeper.AsyncCallback._
 import org.apache.zookeeper.ZooDefs.Ids
 import org.apache.zookeeper.data.Stat
-import org.apache.zookeeper.{CreateMode, KeeperException, Watcher => AWatcher, ZooKeeper => AZooKeeper}
+import org.apache.zookeeper.{CreateMode, KeeperException, ZKUtil, Watcher => AWatcher, ZooKeeper => AZooKeeper}
 import org.typelevel.log4cats.Logger
+import org.typelevel.log4cats.syntax._
 
 import scala.jdk.CollectionConverters._
 import scala.util._
@@ -65,6 +67,8 @@ trait Zookeeper[F[_]] {
 
   def delete(path: Path, version: Int): F[Result[Unit]]
 
+  def deleteRecursive(path: Path): F[Result[Unit]]
+
   def setData(path: Path, body: Array[Byte], version: Int): F[Result[Stat]]
 
   def setDataEncode[T: ByteCodec](path: Path, obj: T, version: Int): F[Result[Stat]]
@@ -87,30 +91,31 @@ object Zookeeper {
 
   case object DecodeError extends Error
 
-  val noopWatcher: AWatcher = _ => ()
+  def noopWatcher[F[_]: Applicative]: Watcher[F] = Watcher.instance(_ => Applicative[F].pure(()))
 
   def apply[F[_]: Async: Logger: MonadError[*[_], Throwable]](
     config: ZookeeperConfig,
     dispatcher: Dispatcher[F],
-    watcher: AWatcher
+    watcher: Watcher[F]
   ): Resource[F, Zookeeper[F]] =
     createLiveZookeeper(config, dispatcher, watcher).widen[Zookeeper[F]]
 
   def apply[F[_]: Async: Logger: MonadError[*[_], Throwable]](
-    config: ZookeeperConfig,
-    watcher: AWatcher = noopWatcher
-  ): Resource[F, Zookeeper[F]] = Dispatcher[F].flatMap(apply(config, _, watcher))
+    config: ZookeeperConfig
+  ): Resource[F, Zookeeper[F]] = Dispatcher[F].flatMap(apply(config, _, noopWatcher[F]))
 
   private[zookeeper] def createLiveZookeeper[F[_]: Async: Logger: MonadError[*[_], Throwable]](
     config: ZookeeperConfig,
     dispatcher: Dispatcher[F],
-    watcher: AWatcher
+    watcher: Watcher[F]
   ): Resource[F, ZookeeperLive[F]] =
     Resource
       .make[F, ZookeeperLive[F]] {
+
+        val unsafeWatcher: AWatcher = event => dispatcher.unsafeRunAndForget(watcher.process(event))
         val zookeeper = Sync[F].delay {
           new ZookeeperLive(
-            new AZooKeeper(s"${config.host}:${config.port}", config.timeout.toMillis.toInt, watcher),
+            new AZooKeeper(s"${config.host}:${config.port}", config.timeout.toMillis.toInt, unsafeWatcher),
             dispatcher,
             config
           )
@@ -139,10 +144,15 @@ object Zookeeper {
 
     private[zookeeper] def close: F[Unit] = {
 
-//      if (config.removeRootOnExit) {
-//        getChildrenWithStatImpl(Path.root, none, false).map
-//      }
-      Sync[F].delay(underlying.close())
+      val removeRoot = if (config.removeRootOnExit) {
+        for {
+          rootStats <- exists(Path.root, watch = false).rethrow
+          _         <- info"Deleting root path ${config.root.raw}"
+          _         <- rootStats.map(stats => deleteRecursive(Path.root).rethrow).sequence_
+        } yield ()
+      } else Async[F].unit
+
+      removeRoot >> Sync[F].delay(underlying.close())
     }
 
     def getChildren(path: Path, watch: Option[WatchType[F]]): F[Result[Vector[Path]]] =
@@ -276,8 +286,27 @@ object Zookeeper {
 
             callback(result)
           }
-
           underlying.delete(transformedPath.raw, version, cb, Context.Empty)
+        }
+
+    }
+
+    def deleteRecursive(path: Path): F[Result[Unit]] = {
+      val transformedPath = rebaseOnRoot(path)
+      Async[F]
+        .async_[Result[Unit]] { callback =>
+          val cb: VoidCallback = (rc, _, context) => {
+            val result = Context
+              .decode(context)
+              .map { _ =>
+                onSuccess(rc)(().asRight[Error])
+              }
+              .toEither
+
+            callback(result)
+          }
+
+          ZKUtil.deleteRecursive(underlying, transformedPath.raw, cb, Context.Empty)
         }
 
     }

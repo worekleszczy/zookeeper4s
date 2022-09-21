@@ -11,10 +11,6 @@ import org.apache.zookeeper.{CreateMode, WatchedEvent}
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.slf4j.Slf4jLogger
 import scodec.Codec
-import cats.syntax.monad._
-import cats.syntax.flatMap._
-import cats.syntax.apply._
-import cats.syntax.applicative._
 
 object Main extends IOApp.Simple {
 
@@ -28,7 +24,7 @@ object Main extends IOApp.Simple {
       root       <- IO.fromTry(Path("/")).toResource
       config     <- ZookeeperConfig.default[IO](root).toResource
       dispatcher <- Dispatcher[IO]
-      zookeeper  <- Zookeeper[IO](config, dispatcher, noopWatcher)
+      zookeeper  <- Zookeeper[IO](config, dispatcher, noopWatcher[IO])
     } yield (root, config, dispatcher, zookeeper)
     setUpApp.use {
       case (_, _, _, zookeeper) =>

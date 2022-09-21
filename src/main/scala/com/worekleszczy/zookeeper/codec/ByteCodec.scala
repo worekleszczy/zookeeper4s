@@ -1,7 +1,8 @@
 package com.worekleszczy.zookeeper.codec
 
-import java.nio.{ByteBuffer, CharBuffer}
 import java.nio.charset.Charset
+import java.nio.{ByteBuffer, CharBuffer}
+import java.util
 import scala.util._
 
 trait ByteCodec[T] {
@@ -22,7 +23,10 @@ object ByteCodec {
       val encoder = utf8Charset.newEncoder()
       val buffer  = CharBuffer.wrap(value)
 
-      Try(encoder.encode(buffer).array())
+      Try {
+        val encoded = encoder.encode(buffer)
+        util.Arrays.copyOf(encoded.array(), encoded.limit())
+      }
     }
 
     def decode(raw: Array[Byte]): Try[String] = {
@@ -35,4 +39,14 @@ object ByteCodec {
   }
 
   def apply[T: ByteCodec]: ByteCodec[T] = implicitly[ByteCodec[T]]
+
+  object syntax {
+    implicit final class EncodeOpts[T](private val value: T) extends AnyVal {
+      def encode(implicit byteCodec: ByteCodec[T]): Try[Array[Byte]] = ByteCodec[T].encode(value)
+    }
+
+    implicit final class DecodeOpts(private val value: Array[Byte]) extends AnyVal {
+      def decode[T](implicit byteCodec: ByteCodec[T]): Try[T] = ByteCodec[T].decode(value)
+    }
+  }
 }
