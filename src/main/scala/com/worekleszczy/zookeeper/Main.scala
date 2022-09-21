@@ -7,9 +7,14 @@ import cats.effect.{IO, IOApp}
 import com.worekleszczy.zookeeper.Zookeeper.noopWatcher
 import com.worekleszczy.zookeeper.config.ZookeeperConfig
 import com.worekleszczy.zookeeper.model.Path
-import org.apache.zookeeper.WatchedEvent
+import org.apache.zookeeper.{CreateMode, WatchedEvent}
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.slf4j.Slf4jLogger
+import scodec.Codec
+import cats.syntax.monad._
+import cats.syntax.flatMap._
+import cats.syntax.apply._
+import cats.syntax.applicative._
 
 object Main extends IOApp.Simple {
 
@@ -17,24 +22,29 @@ object Main extends IOApp.Simple {
 
   def run: IO[Unit] = {
 
+    implicit val codec: Codec[String] = scodec.codecs.utf8
+
     val setUpApp = for {
-      root       <- IO.fromTry(Path("/bacchus")).toResource
+      root       <- IO.fromTry(Path("/")).toResource
       config     <- ZookeeperConfig.default[IO](root).toResource
       dispatcher <- Dispatcher[IO]
       zookeeper  <- Zookeeper[IO](config, dispatcher, noopWatcher)
     } yield (root, config, dispatcher, zookeeper)
-
     setUpApp.use {
       case (_, _, _, zookeeper) =>
         for {
           listDir <- IO.fromTry(Path("/"))
-          _ <-
-            EventStream
-              .watchChildren(zookeeper, listDir)
-              .evalTap(children => IO.println(children.map(_.name).mkString(",")))
-              .compile
-              .drain
-          _ <- IO.never[Unit]
+          newNode <- IO.fromTry(Path("/another_bites"))
+          stats   <- zookeeper.createEncode(newNode, "alamakotaakotmaale", CreateMode.EPHEMERAL_SEQUENTIAL)
+          _       <- IO.println(stats)
+          _       <- zookeeper.getChildren(listDir, false).flatTap(IO.println)
+//          _ <-
+//            EventStream
+//              .watchChildren(zookeeper, listDir)
+//              .evalTap(children => IO.println(children.map(_.name).mkString(",")))
+//              .compile
+//              .drain
+//          _ <- IO.never[Unit]
         } yield ()
     }
 

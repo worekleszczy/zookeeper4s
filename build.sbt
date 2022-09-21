@@ -59,6 +59,8 @@ inThisBuild(
 )
 val It = config("it").extend(Test)
 
+addCompilerPlugin("org.typelevel" % "kind-projector" % "0.13.2" cross CrossVersion.full)
+
 lazy val root = (project in file("."))
   .overrideConfigs(It)
   .settings(
@@ -67,5 +69,5 @@ lazy val root = (project in file("."))
     name := "zookeeper4s",
     version := "0.1.0-SNAPSHOT",
     publishConfiguration := publishConfiguration.value.withOverwrite(true),
-    libraryDependencies ++= catsEffect ++ zookeeper ++ testContainers ++ log4cats ++ logback ++ fs2 ++ tagging
+    libraryDependencies ++= catsEffect ++ zookeeper ++ testContainers ++ log4cats ++ logback ++ fs2 ++ tagging ++ scodec
   )
