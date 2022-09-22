@@ -170,24 +170,27 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
     }
   }
 
-//  test("the one about serial when listing") {
-//    zookeeper().use {
-//      case (zookeeper, id) =>
-//        val testNodePath1 = Path.unsafeFromString("/testnode1")
-//        val testNodePath2 = Path.unsafeFromString("/testnode2")
-//        val testNodePath3 = Path.unsafeFromString("/testnode3")
-//
-//        val paths = Vector(testNodePath1, testNodePath2, testNodePath3)
-//
-//        for {
-//
-//          _     <- paths.map(zookeeper.createEmpty(_, CreateMode.PERSISTENT_SEQUENTIAL).rethrow).sequence
-//          nodes <- zookeeper.getChildren(Path.root, false).rethrow
-//          _     <- assertIO(nodes.flatMap(_.sequential).size.pure[IO], 3)
-////          _ <- assertIO(nodes.sortBy(_.sequential.getOrElse(Long.MaxValue)).map(_.name))
-//        } yield ()
-//    }
-//  }
+  test("the one about serial when listing") {
+    zookeeper().use {
+      case (zookeeper, id) =>
+        val testNodePath1 = Path.unsafeFromString("/testnode1")
+        val testNodePath2 = Path.unsafeFromString("/testnode2")
+        val testNodePath3 = Path.unsafeFromString("/testnode3")
+
+        val paths = Vector(testNodePath1, testNodePath2, testNodePath3)
+
+        for {
+
+          _     <- paths.map(zookeeper.createEmpty(_, CreateMode.PERSISTENT_SEQUENTIAL).rethrow).sequence
+          nodes <- zookeeper.getChildren(Path.root, false).rethrow
+          _     <- assertIO(nodes.flatMap(_.sequential).size.pure[IO], 3)
+          _ <- assertIO(
+            nodes.filter(_.sequential.isDefined).sortBy(_.sequential.get).map(_.name).pure[IO],
+            Vector("testnode1", "testnode2", "testnode3")
+          )
+        } yield ()
+    }
+  }
 
   test("get notified only after a file is deleted change happened") {
     zookeeper().use {
