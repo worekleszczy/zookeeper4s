@@ -34,6 +34,7 @@ sealed trait Path extends Any {
 
   private[model] def value: JPAth
 }
+
 case class SequentialContext(nameOnly: String, sequential: Long)
 
 private[model] final case class PathImpl(
@@ -111,5 +112,7 @@ object Path {
   }
 
   def unsafeAsAbsolutePath(raw: String): Path = asAbsolutePath(raw).get
+
+  implicit val ordering: Ordering[Path] = Ordering.by(path => (path.sequential.getOrElse(Long.MaxValue), path.raw))
 
 }

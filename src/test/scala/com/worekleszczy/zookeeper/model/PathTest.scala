@@ -236,4 +236,25 @@ class PathTest extends FunSuite {
     assertEquals(result.sequential, None)
   }
 
+  test("sorting paths with sequential number from min to max") {
+
+    val a = Path("/a", SequentialContext("a", 3L)).get
+    val b = Path("/b", SequentialContext("b", 2L)).get
+    val c = Path("/c", SequentialContext("c", 1L)).get
+
+    assertEquals(Vector(a, b, c).sorted, Vector(c, b, a))
+
+  }
+
+  test("put paths without sequential number last") {
+
+    val a = Path("/a").get
+    val d = Path("/d").get
+    val b = Path("/b", SequentialContext("b", 2L)).get
+    val c = Path("/c", SequentialContext("c", 1L)).get
+
+    assertEquals(Vector(a, d, b, c).sorted, Vector(c, b, a, d))
+
+  }
+
 }
