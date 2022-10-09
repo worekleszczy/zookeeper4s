@@ -311,7 +311,6 @@ object Zookeeper {
 
     }
 
-
     def deleteRecursive(path: Path): F[Result[Unit]] = {
       val absolutePath = rebaseOnRoot(path)
       Async[F]
