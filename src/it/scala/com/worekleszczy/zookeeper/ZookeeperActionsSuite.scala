@@ -6,6 +6,7 @@ import cats.effect.{Deferred, IO, Resource}
 import cats.syntax.applicative._
 import cats.syntax.monadError._
 import cats.syntax.option._
+import cats.syntax.traverse._
 import com.worekleszczy.zookeeper.Zookeeper.{noopWatcher, ZookeeperClientError, ZookeeperLive}
 import com.worekleszczy.zookeeper.codec.ByteCodec.syntax._
 import com.worekleszczy.zookeeper.config.ZookeeperConfig
@@ -116,7 +117,7 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
     }
   }
 
-  test("get notified only after a change happened") {
+  test("get notified only after a file is created change happened") {
     zookeeper().use {
       case (zookeeper, id) =>
         val testNodePath = Path.unsafeFromString("/testnode")
@@ -165,6 +166,46 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
           }
           _ <- assertIO(event.getPath.pure[IO], s"/$id/testnode")
           _ <- assertIO(event.getType.pure[IO], EventType.NodeCreated)
+        } yield ()
+    }
+  }
+
+  test("the one about serial when listing") {
+    zookeeper().use {
+      case (zookeeper, id) =>
+        val testNodePath1 = Path.unsafeFromString("/testnode1")
+        val testNodePath2 = Path.unsafeFromString("/testnode2")
+        val testNodePath3 = Path.unsafeFromString("/testnode3")
+
+        val paths = Vector(testNodePath1, testNodePath2, testNodePath3)
+
+        for {
+
+          _     <- paths.map(zookeeper.createEmpty(_, CreateMode.PERSISTENT_SEQUENTIAL).rethrow).sequence
+          nodes <- zookeeper.getChildren(Path.root, false).rethrow
+          _     <- assertIO(nodes.flatMap(_.sequential).size.pure[IO], 3)
+          _ <- assertIO(
+            nodes.filter(_.sequential.isDefined).sortBy(_.sequential.get).map(_.name).pure[IO],
+            Vector("testnode1", "testnode2", "testnode3")
+          )
+        } yield ()
+    }
+  }
+
+  test("get notified only after a file is deleted change happened") {
+    zookeeper().use {
+      case (zookeeper, id) =>
+        val testNodePath = Path.unsafeFromString("/testnode")
+        for {
+          deferred <- Deferred[IO, WatchedEvent]
+          watcher = Watcher.instance(deferred.complete)
+          _         <- zookeeper.createEmpty(testNodePath, CreateMode.PERSISTENT).rethrow
+          (_, stat) <- zookeeper.getData[String](testNodePath, watcher).rethrow
+          _         <- assertIO(deferred.tryGet, none)
+          _         <- zookeeper.delete(testNodePath, stat.getVersion)
+          event     <- deferred.get
+          _         <- assertIO(event.getPath.pure[IO], s"/$id/testnode")
+          _         <- assertIO(event.getType.pure[IO], EventType.NodeDeleted)
         } yield ()
     }
   }
