@@ -17,9 +17,17 @@ import com.worekleszczy.zookeeper.codec.ByteCodec
 import com.worekleszczy.zookeeper.config.ZookeeperConfig
 import com.worekleszczy.zookeeper.model.{Path, SequentialContext}
 import org.apache.zookeeper.AsyncCallback._
+import org.apache.zookeeper.Watcher.WatcherType
 import org.apache.zookeeper.ZooDefs.Ids
 import org.apache.zookeeper.data.Stat
-import org.apache.zookeeper.{CreateMode, KeeperException, ZKUtil, Watcher => AWatcher, ZooKeeper => AZooKeeper}
+import org.apache.zookeeper.{
+  AddWatchMode,
+  CreateMode,
+  KeeperException,
+  ZKUtil,
+  Watcher => AWatcher,
+  ZooKeeper => AZooKeeper
+}
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.syntax._
 
@@ -80,6 +88,8 @@ trait Zookeeper[F[_]] {
     exists(path, Option.when(watch)(WatchType.DefaultWatcher))
 
   def exists(path: Path, watch: Watcher[F]): F[Result[Option[Stat]]] = exists(path, WatchType.SingleWatcher(watch).some)
+
+  def addWatcher(path: Path, watcher: Watcher[F], mode: AddWatchMode): Resource[F, Unit]
 }
 
 object Zookeeper {
@@ -388,6 +398,34 @@ object Zookeeper {
 
           case None => underlying.exists(transformed.raw, false, cb, Context.Empty)
         }
+      }
+    }
+
+    def addWatcher(path: Path, watcher: Watcher[F], mode: AddWatchMode): Resource[F, Unit] = {
+
+      val transformed             = rebaseOnRoot(path)
+      val unsafeWatcher: AWatcher = event => dispatcher.unsafeRunAndForget(watcher.process(event))
+
+      Resource.make[F, Unit] {
+        Sync[F].delay {
+          underlying.addWatch(transformed.raw, unsafeWatcher, mode)
+        }
+      } { _ =>
+        Async[F]
+          .async_[Result[Unit]] { callback =>
+            val cb: VoidCallback = (rc, _, context) => {
+              val result = Context
+                .decode(context)
+                .map { _ =>
+                  onSuccess(rc)(().asRight[Error])
+                }
+                .toEither
+
+              callback(result)
+            }
+            underlying.removeWatches(transformed.raw, unsafeWatcher, WatcherType.Any, false, cb, Context.Empty)
+          }
+          .rethrow
       }
     }
 
