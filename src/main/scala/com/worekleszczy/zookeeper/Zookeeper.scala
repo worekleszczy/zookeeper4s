@@ -11,7 +11,7 @@ import cats.syntax.foldable._
 import cats.syntax.functor._
 import cats.syntax.monadError._
 import cats.syntax.option._
-import cats.{Applicative, MonadError}
+import cats.{Applicative, Functor, MonadError}
 import com.worekleszczy.zookeeper.Zookeeper.Result
 import com.worekleszczy.zookeeper.codec.ByteCodec
 import com.worekleszczy.zookeeper.config.ZookeeperConfig
@@ -60,12 +60,12 @@ trait Zookeeper[F[_]] {
   final def getChildrenWithStat(path: Path, watch: Boolean): F[Result[(Vector[Path], Stat)]] =
     getChildrenWithStat(path, Option.when(watch)(WatchType.DefaultWatcher))
 
-  def getData[T: ByteCodec](path: Path, watch: Option[WatchType[F]]): F[Result[(T, Stat)]]
+  def getData[T: ByteCodec](path: Path, watch: Option[WatchType[F]]): F[Result[Option[(T, Stat)]]]
 
-  final def getData[T: ByteCodec](path: Path, watch: Boolean): F[Result[(T, Stat)]] =
+  final def getData[T: ByteCodec](path: Path, watch: Boolean): F[Result[Option[(T, Stat)]]] =
     getData(path, Option.when(watch)(WatchType.DefaultWatcher))
 
-  final def getData[T: ByteCodec](path: Path, watch: Watcher[F]): F[Result[(T, Stat)]] =
+  final def getData[T: ByteCodec](path: Path, watch: Watcher[F]): F[Result[Option[(T, Stat)]]] =
     getData(path, WatchType.SingleWatcher(watch).some)
 
   def create(path: Path, data: Array[Byte], mode: CreateMode): F[Result[(Path, Stat)]]
@@ -228,17 +228,33 @@ object Zookeeper {
       watch: Option[WatchType[F]]
     ): F[Result[(Vector[Path], Stat)]] = getChildrenWithStatImpl(path, watch, relative = true)
 
-    def getData[T: ByteCodec](path: Path, watch: Option[WatchType[F]]): F[Either[Error, (T, Stat)]] = {
+    def getData[T: ByteCodec](path: Path, watch: Option[WatchType[F]]): F[Either[Error, Option[(T, Stat)]]] = {
 
       val absolutePath = rebaseOnRoot(path)
       Async[F]
-        .async_[(Either[Error, (T, Stat)])] { callback =>
-          val cb: DataCallback = (_, _, context, data, stat) => {
+        .async_[(Either[Error, Option[(T, Stat)]])] { callback =>
+          val cb: DataCallback = (rc, _, context, data, stat) => {
+            /*
+                        Context
+              .decode(context)
+              .map { _ =>
+                onSuccess(rc) {
+                  stat.some.asRight
+                }.recover {
+                  case ZookeeperClientError(KeeperException.Code.NONODE) => none
+                }
+              }
+              .toEither
+             */
+
             val result = Context
               .decode(context)
               .map { _ =>
-                ByteCodec[T].decode(data).toEither.bimap(_ => DecodeError, _ -> stat)
-
+                onSuccess(rc) {
+                  ByteCodec[T].decode(data).toEither.bimap(_ => DecodeError, data => (data, stat).some)
+                }.recover {
+                  case ZookeeperClientError(KeeperException.Code.NONODE) => none
+                }
               }
               .toEither
 
@@ -454,6 +470,29 @@ object Zookeeper {
         case other =>
           ZookeeperClientError(other).asLeft[T].leftWiden[Error]
       }
+    }
+  }
+
+  object syntax {
+    implicit final class ZookeeperUnsafeOps[F[_]](private val zookeeper: Zookeeper[F]) extends AnyVal {
+      def unsafeGetData[T: ByteCodec](path: Path, watch: Watcher[F])(implicit
+        functor: Functor[F]
+      ): F[Result[(T, Stat)]] =
+        flattenOption(
+          zookeeper
+            .getData(path, watch)
+        )
+      def unsafeGetData[T: ByteCodec](path: Path, watch: Boolean)(implicit functor: Functor[F]): F[Result[(T, Stat)]] =
+        flattenOption(
+          zookeeper
+            .getData(path, watch)
+        )
+
+      private def flattenOption[T](
+        effect: F[Result[Option[(T, Stat)]]]
+      )(implicit functor: Functor[F]): F[Result[(T, Stat)]] =
+        effect.map(_.flatMap(_.fold(ZookeeperClientError(KeeperException.Code.NONODE).asLeft[(T, Stat)])(_.asRight)))
+
     }
   }
 }

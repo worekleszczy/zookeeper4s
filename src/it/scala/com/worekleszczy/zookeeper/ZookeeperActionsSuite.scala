@@ -7,7 +7,8 @@ import cats.syntax.applicative._
 import cats.syntax.monadError._
 import cats.syntax.option._
 import cats.syntax.traverse._
-import com.worekleszczy.zookeeper.Zookeeper.{ZookeeperClientError, ZookeeperLive, noopWatcher}
+import com.worekleszczy.zookeeper.Zookeeper.syntax._
+import com.worekleszczy.zookeeper.Zookeeper.{noopWatcher, ZookeeperClientError, ZookeeperLive}
 import com.worekleszczy.zookeeper.codec.ByteCodec.syntax._
 import com.worekleszczy.zookeeper.config.ZookeeperConfig
 import com.worekleszczy.zookeeper.model.Path
@@ -76,6 +77,17 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
     }
   }
 
+  test("should return none when getData is executed for non existing node") {
+
+    zookeeper().use {
+      case (zookeeper, _) =>
+        for {
+          result <- zookeeper.getData[String](Path.unsafeFromString("/testnode"), false).rethrow
+          _      <- assertIO(result.pure[IO], none)
+        } yield ()
+    }
+  }
+
   test("write a body to a node and read it back unchanged") {
     zookeeper().use {
       case (zookeeper, _) =>
@@ -84,7 +96,7 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
           encoded <- IO.fromTry(testNodeExpectedValue.encode)
           testNodePath = Path.unsafeFromString("/testnode")
           _                  <- zookeeper.create(testNodePath, encoded, CreateMode.PERSISTENT)
-          (testNodeValue, _) <- zookeeper.getData[String](Path.unsafeFromString("/testnode"), false).rethrow
+          (testNodeValue, _) <- zookeeper.unsafeGetData[String](Path.unsafeFromString("/testnode"), false).rethrow
           _                  <- assertIO(testNodeValue.pure[IO], testNodeExpectedValue)
         } yield ()
     }
@@ -200,7 +212,7 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
           deferred <- Deferred[IO, WatchedEvent]
           watcher = Watcher.instance(deferred.complete(_).void)
           _         <- zookeeper.createEmpty(testNodePath, CreateMode.PERSISTENT).rethrow
-          (_, stat) <- zookeeper.getData[String](testNodePath, watcher).rethrow
+          (_, stat) <- zookeeper.unsafeGetData[String](testNodePath, watcher).rethrow
           _         <- assertIO(deferred.tryGet, none)
           _         <- zookeeper.delete(testNodePath, stat.getVersion)
           event     <- deferred.get
