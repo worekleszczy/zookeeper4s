@@ -7,6 +7,7 @@ import cats.syntax.applicative._
 import cats.syntax.monadError._
 import cats.syntax.option._
 import cats.syntax.traverse._
+import com.worekleszczy.zookeeper.Zookeeper.syntax._
 import com.worekleszczy.zookeeper.Zookeeper.{noopWatcher, ZookeeperClientError, ZookeeperLive}
 import com.worekleszczy.zookeeper.codec.ByteCodec.syntax._
 import com.worekleszczy.zookeeper.config.ZookeeperConfig
@@ -14,7 +15,7 @@ import com.worekleszczy.zookeeper.model.Path
 import fs2.Stream
 import munit.CatsEffectSuite
 import org.apache.zookeeper.Watcher.Event.EventType
-import org.apache.zookeeper.{CreateMode, KeeperException, WatchedEvent}
+import org.apache.zookeeper.{AddWatchMode, CreateMode, KeeperException, WatchedEvent}
 import org.testcontainers.containers.GenericContainer
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.slf4j.Slf4jLogger
@@ -76,6 +77,17 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
     }
   }
 
+  test("should return none when getData is executed for non existing node") {
+
+    zookeeper().use {
+      case (zookeeper, _) =>
+        for {
+          result <- zookeeper.getData[String](Path.unsafeFromString("/testnode"), false).rethrow
+          _      <- assertIO(result.pure[IO], none)
+        } yield ()
+    }
+  }
+
   test("write a body to a node and read it back unchanged") {
     zookeeper().use {
       case (zookeeper, _) =>
@@ -84,7 +96,7 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
           encoded <- IO.fromTry(testNodeExpectedValue.encode)
           testNodePath = Path.unsafeFromString("/testnode")
           _                  <- zookeeper.create(testNodePath, encoded, CreateMode.PERSISTENT)
-          (testNodeValue, _) <- zookeeper.getData[String](Path.unsafeFromString("/testnode"), false).rethrow
+          (testNodeValue, _) <- zookeeper.unsafeGetData[String](Path.unsafeFromString("/testnode"), false).rethrow
           _                  <- assertIO(testNodeValue.pure[IO], testNodeExpectedValue)
         } yield ()
     }
@@ -123,7 +135,7 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
         val testNodePath = Path.unsafeFromString("/testnode")
         for {
           deferred <- Deferred[IO, WatchedEvent]
-          watcher = Watcher.instance(deferred.complete)
+          watcher = Watcher.instance(deferred.complete(_).void)
           _     <- assertIO(zookeeper.exists(testNodePath, watcher).rethrow, none)
           _     <- assertIO(deferred.tryGet, none)
           _     <- zookeeper.createEmpty(testNodePath, CreateMode.PERSISTENT).rethrow
@@ -198,14 +210,108 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
         val testNodePath = Path.unsafeFromString("/testnode")
         for {
           deferred <- Deferred[IO, WatchedEvent]
-          watcher = Watcher.instance(deferred.complete)
+          watcher = Watcher.instance(deferred.complete(_).void)
           _         <- zookeeper.createEmpty(testNodePath, CreateMode.PERSISTENT).rethrow
-          (_, stat) <- zookeeper.getData[String](testNodePath, watcher).rethrow
+          (_, stat) <- zookeeper.unsafeGetData[String](testNodePath, watcher).rethrow
           _         <- assertIO(deferred.tryGet, none)
           _         <- zookeeper.delete(testNodePath, stat.getVersion)
           event     <- deferred.get
           _         <- assertIO(event.getPath.pure[IO], s"/$id/testnode")
           _         <- assertIO(event.getType.pure[IO], EventType.NodeDeleted)
+        } yield ()
+    }
+  }
+
+  test("add persistent watcher and remove on close") {
+    zookeeper().use {
+      case (zookeeper, id) =>
+        val testNodePath = Path.unsafeFromString("/test_container")
+        val childA       = testNodePath.resolve("a")
+        val childB       = testNodePath.resolve("b")
+        for {
+          eventQueue <- Queue.unbounded[IO, WatchedEvent]
+          watcher = Watcher.instance(eventQueue.offer)
+          allAvailable =
+            Stream
+              .repeatEval(eventQueue.tryTake)
+              .collectWhile {
+                case Some(x) => x
+              }
+              .compile
+              .toVector
+          (_, initialStats) <- zookeeper.createEmpty(testNodePath, CreateMode.CONTAINER).rethrow
+          lastUpdateStats <- zookeeper.addWatcher(testNodePath, watcher, AddWatchMode.PERSISTENT).use { _ =>
+            for {
+              firstUpdateStats        <- zookeeper.setDataEncode(testNodePath, "first", initialStats.getVersion).rethrow
+              secondUpdateStats       <- zookeeper.setDataEncode(testNodePath, "second", firstUpdateStats.getVersion).rethrow
+              (_, childAInitialStats) <- zookeeper.createEmpty(childA, CreateMode.EPHEMERAL).rethrow
+              _                       <- zookeeper.setDataEncode(childA, "childANewContent", childAInitialStats.getVersion).rethrow
+              generatedEvents         <- allAvailable
+              _ <- assertIO(
+                generatedEvents.map(_.getType).pure[IO],
+                Vector.fill(2)(EventType.NodeDataChanged) :+ EventType.NodeChildrenChanged
+              )
+            } yield secondUpdateStats
+          }
+          _                       <- allAvailable // we drop all events that are in queue left after a watcher was removed
+          thirdUpdateStats        <- zookeeper.setDataEncode(testNodePath, "third", lastUpdateStats.getVersion).rethrow
+          _                       <- zookeeper.setDataEncode(testNodePath, "forth", thirdUpdateStats.getVersion).rethrow
+          (_, childBInitialStats) <- zookeeper.createEmpty(childB, CreateMode.EPHEMERAL).rethrow
+          _                       <- zookeeper.setDataEncode(childB, "childANewContent", childBInitialStats.getVersion).rethrow
+
+          remainingEvents <- allAvailable
+          _ <- assertIO(
+            remainingEvents.pure[IO],
+            Vector.empty
+          )
+
+        } yield ()
+    }
+  }
+
+  test("add persistent recurisve watcher and remove on close") {
+    zookeeper().use {
+      case (zookeeper, id) =>
+        val testNodePath = Path.unsafeFromString("/test_container")
+        val childA       = testNodePath.resolve("a")
+        val childB       = testNodePath.resolve("b")
+        for {
+          eventQueue <- Queue.unbounded[IO, WatchedEvent]
+          watcher = Watcher.instance(eventQueue.offer)
+          allAvailable =
+            Stream
+              .repeatEval(eventQueue.tryTake)
+              .collectWhile {
+                case Some(x) => x
+              }
+              .compile
+              .toVector
+          (_, initialStats) <- zookeeper.createEmpty(testNodePath, CreateMode.CONTAINER).rethrow
+          lastUpdateStats <- zookeeper.addWatcher(testNodePath, watcher, AddWatchMode.PERSISTENT_RECURSIVE).use { _ =>
+            for {
+              firstUpdateStats        <- zookeeper.setDataEncode(testNodePath, "first", initialStats.getVersion).rethrow
+              secondUpdateStats       <- zookeeper.setDataEncode(testNodePath, "second", firstUpdateStats.getVersion).rethrow
+              (_, childAInitialStats) <- zookeeper.createEmpty(childA, CreateMode.EPHEMERAL).rethrow
+              _                       <- zookeeper.setDataEncode(childA, "childANewContent", childAInitialStats.getVersion).rethrow
+              generatedEvents         <- allAvailable
+              _ <- assertIO(
+                generatedEvents.map(_.getType).pure[IO],
+                Vector.fill(2)(EventType.NodeDataChanged) :+ EventType.NodeCreated :+ EventType.NodeDataChanged
+              )
+            } yield secondUpdateStats
+          }
+          _                       <- allAvailable // we drop all events that are in queue left after a watcher was removed
+          thirdUpdateStats        <- zookeeper.setDataEncode(testNodePath, "third", lastUpdateStats.getVersion).rethrow
+          _                       <- zookeeper.setDataEncode(testNodePath, "forth", thirdUpdateStats.getVersion).rethrow
+          (_, childBInitialStats) <- zookeeper.createEmpty(childB, CreateMode.EPHEMERAL).rethrow
+          _                       <- zookeeper.setDataEncode(childB, "childANewContent", childBInitialStats.getVersion).rethrow
+
+          remainingEvents <- allAvailable
+          _ <- assertIO(
+            remainingEvents.pure[IO],
+            Vector.empty
+          )
+
         } yield ()
     }
   }
