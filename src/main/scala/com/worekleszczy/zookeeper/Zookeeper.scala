@@ -20,14 +20,7 @@ import org.apache.zookeeper.AsyncCallback._
 import org.apache.zookeeper.Watcher.WatcherType
 import org.apache.zookeeper.ZooDefs.Ids
 import org.apache.zookeeper.data.Stat
-import org.apache.zookeeper.{
-  AddWatchMode,
-  CreateMode,
-  KeeperException,
-  ZKUtil,
-  Watcher => AWatcher,
-  ZooKeeper => AZooKeeper
-}
+import org.apache.zookeeper.{AddWatchMode, CreateMode, KeeperException, ZKUtil, Watcher => AWatcher, ZooKeeper => AZooKeeper}
 import org.typelevel.log4cats.Logger
 import org.typelevel.log4cats.syntax._
 
@@ -89,7 +82,10 @@ trait Zookeeper[F[_]] {
 
   def exists(path: Path, watch: Watcher[F]): F[Result[Option[Stat]]] = exists(path, WatchType.SingleWatcher(watch).some)
 
+  def existsResource(path: Path, watch: Watcher[F]): Resource[F, Result[Option[Stat]]]
+
   def addWatcher(path: Path, watcher: Watcher[F], mode: AddWatchMode): Resource[F, Unit]
+
 }
 
 object Zookeeper {
@@ -402,6 +398,49 @@ object Zookeeper {
 
           case None => underlying.exists(transformed.raw, false, cb, Context.Empty)
         }
+      }
+    }
+
+    def existsResource(path: Path, watch: Watcher[F]): Resource[F, Result[Option[Stat]]] = {
+
+      val transformed             = rebaseOnRoot(path)
+      val unsafeWatcher: AWatcher = event => dispatcher.unsafeRunAndForget(watch.process(event))
+
+      Resource.make[F, Result[Option[Stat]]] {
+        Async[F].async_[Result[Option[Stat]]] { callback =>
+          val cb: StatCallback = (rc, _, context, stat) => {
+
+            callback(
+              Context
+                .decode(context)
+                .map { _ =>
+                  onSuccess(rc) {
+                    stat.some.asRight
+                  }.recover {
+                    case ZookeeperClientError(KeeperException.Code.NONODE) => none
+                  }
+                }
+                .toEither
+            )
+          }
+          underlying.exists(transformed.raw, unsafeWatcher, cb, Context.Empty)
+        }
+      } { _ =>
+        Async[F]
+          .async_[Result[Unit]] { callback =>
+            val cb: VoidCallback = (rc, _, context) => {
+              val result = Context
+                .decode(context)
+                .map { _ =>
+                  onSuccess(rc)(().asRight[Error])
+                }
+                .toEither
+
+              callback(result)
+            }
+            underlying.removeWatches(transformed.raw, unsafeWatcher, WatcherType.Any, false, cb, Context.Empty)
+          }
+          .rethrow
       }
     }
 

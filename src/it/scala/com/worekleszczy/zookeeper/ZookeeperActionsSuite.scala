@@ -8,7 +8,7 @@ import cats.syntax.monadError._
 import cats.syntax.option._
 import cats.syntax.traverse._
 import com.worekleszczy.zookeeper.Zookeeper.syntax._
-import com.worekleszczy.zookeeper.Zookeeper.{ZookeeperClientError, ZookeeperLive, noopWatcher}
+import com.worekleszczy.zookeeper.Zookeeper.{noopWatcher, ZookeeperClientError, ZookeeperLive}
 import com.worekleszczy.zookeeper.codec.ByteCodec.syntax._
 import com.worekleszczy.zookeeper.config.ZookeeperConfig
 import com.worekleszczy.zookeeper.model.Path
@@ -323,6 +323,21 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
             Vector.empty
           )
 
+        } yield ()
+    }
+  }
+
+  test("should not publish any event to watcher outside the resource") {
+    zookeeper().use {
+      case (zookeeper, _) =>
+        val testPath = Path.unsafeFromString("/test_conteiner")
+        for {
+          deferred <- Deferred[IO, Boolean]
+          watcher = Watcher.instance(event => IO.println(event) <* deferred.complete(false))
+          _ <- zookeeper.existsResource(testPath, watcher).use(_ => IO.sleep(5.seconds))
+          _ <- zookeeper.createEmpty(testPath, CreateMode.PERSISTENT)
+          _ <- (IO.sleep(5.seconds) *> deferred.complete(true)).start
+          _ <- assertIOBoolean(deferred.get)
         } yield ()
     }
   }
