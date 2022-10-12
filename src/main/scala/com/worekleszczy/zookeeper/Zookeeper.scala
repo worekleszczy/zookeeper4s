@@ -234,18 +234,6 @@ object Zookeeper {
       Async[F]
         .async_[(Either[Error, Option[(T, Stat)]])] { callback =>
           val cb: DataCallback = (rc, _, context, data, stat) => {
-            /*
-                        Context
-              .decode(context)
-              .map { _ =>
-                onSuccess(rc) {
-                  stat.some.asRight
-                }.recover {
-                  case ZookeeperClientError(KeeperException.Code.NONODE) => none
-                }
-              }
-              .toEither
-             */
 
             val result = Context
               .decode(context)
