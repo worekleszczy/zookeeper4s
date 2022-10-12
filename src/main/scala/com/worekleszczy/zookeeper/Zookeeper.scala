@@ -433,7 +433,6 @@ object Zookeeper {
       }
     }
 
-
     def setDataEncode[T: ByteCodec](path: Path, obj: T, version: Int): F[Result[Stat]] =
       for {
         body <- Sync[F].fromTry(ByteCodec[T].encode(obj))

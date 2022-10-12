@@ -8,7 +8,7 @@ import cats.syntax.monadError._
 import cats.syntax.option._
 import cats.syntax.traverse._
 import com.worekleszczy.zookeeper.Zookeeper.syntax._
-import com.worekleszczy.zookeeper.Zookeeper.{noopWatcher, ZookeeperClientError, ZookeeperLive}
+import com.worekleszczy.zookeeper.Zookeeper.{ZookeeperClientError, ZookeeperLive, noopWatcher}
 import com.worekleszczy.zookeeper.codec.ByteCodec.syntax._
 import com.worekleszczy.zookeeper.config.ZookeeperConfig
 import com.worekleszczy.zookeeper.model.Path
@@ -88,18 +88,13 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
     }
   }
 
-  test("should create a watcher if node is doesn't exist") {
+  test("should return none when getData is executed for non existing node") {
 
     zookeeper().use {
       case (zookeeper, _) =>
         for {
-          deferred <- Deferred[IO, EventType]
-          watcher  = Watcher.instance(event => deferred.complete(event.getType).void)
-          testPath = Path.unsafeFromString("/testnode")
-          result <- zookeeper.getData[String](testPath, watcher).rethrow
+          result <- zookeeper.getData[String](Path.unsafeFromString("/testnode"), false).rethrow
           _      <- assertIO(result.pure[IO], none)
-          _      <- zookeeper.createEmpty(testPath, CreateMode.PERSISTENT)
-          _      <- assertIO(deferred.get, EventType.NodeCreated)
         } yield ()
     }
   }
