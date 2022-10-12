@@ -88,6 +88,22 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
     }
   }
 
+  test("should create a watcher if node is doesn't exist") {
+
+    zookeeper().use {
+      case (zookeeper, _) =>
+        for {
+          deferred <- Deferred[IO, EventType]
+          watcher  = Watcher.instance(event => deferred.complete(event.getType).void)
+          testPath = Path.unsafeFromString("/testnode")
+          result <- zookeeper.getData[String](testPath, watcher).rethrow
+          _      <- assertIO(result.pure[IO], none)
+          _      <- zookeeper.createEmpty(testPath, CreateMode.PERSISTENT)
+          _      <- assertIO(deferred.get, EventType.NodeCreated)
+        } yield ()
+    }
+  }
+
   test("write a body to a node and read it back unchanged") {
     zookeeper().use {
       case (zookeeper, _) =>
