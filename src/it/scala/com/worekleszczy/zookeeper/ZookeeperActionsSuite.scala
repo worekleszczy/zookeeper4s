@@ -7,11 +7,11 @@ import cats.syntax.applicative._
 import cats.syntax.monadError._
 import cats.syntax.option._
 import cats.syntax.traverse._
-import com.worekleszczy.zookeeper.Zookeeper.syntax._
 import com.worekleszczy.zookeeper.Zookeeper.{noopWatcher, ZookeeperClientError, ZookeeperLive}
 import com.worekleszczy.zookeeper.codec.ByteCodec.syntax._
 import com.worekleszczy.zookeeper.config.ZookeeperConfig
 import com.worekleszczy.zookeeper.model.Path
+import com.worekleszczy.zookeeper.syntax._
 import fs2.Stream
 import munit.CatsEffectSuite
 import org.apache.zookeeper.Watcher.Event.EventType
@@ -235,7 +235,7 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
 
   test("add persistent watcher and remove on close") {
     zookeeper().use {
-      case (zookeeper, id) =>
+      case (zookeeper, _) =>
         val testNodePath = Path.unsafeFromString("/test_container")
         val childA       = testNodePath.resolve("a")
         val childB       = testNodePath.resolve("b")
@@ -333,8 +333,8 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
         val testPath = Path.unsafeFromString("/test_conteiner")
         for {
           deferred <- Deferred[IO, Boolean]
-          watcher = Watcher.instance(event => IO.println(event) <* deferred.complete(false))
-          _ <- zookeeper.existsResource(testPath, watcher).use(_ => IO.sleep(5.seconds))
+          watcher = Watcher.instance(_ => deferred.complete(false).void).filterWatch
+          _ <- zookeeper.existsR(testPath, watcher).use(_ => IO.unit)
           _ <- zookeeper.createEmpty(testPath, CreateMode.PERSISTENT)
           _ <- (IO.sleep(5.seconds) *> deferred.complete(true)).start
           _ <- assertIOBoolean(deferred.get)
