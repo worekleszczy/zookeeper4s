@@ -68,7 +68,7 @@ lazy val root = (project in file("."))
     inConfig(It)(Defaults.testSettings),
     It / fork := true,
     name := "zookeeper4s",
-    version := "0.3.0",
+    version := "0.4.0-SNAPSHOT",
     publishConfiguration := publishConfiguration.value.withOverwrite(true),
     libraryDependencies ++= catsEffect ++ zookeeper ++ testContainers ++ log4cats ++ logback ++ fs2 ++ tagging ++ scodec
   )
