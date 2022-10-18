@@ -70,20 +70,9 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
         for {
           _ <- zookeeper.createEmpty(Path.unsafeFromString("/testnode"), CreateMode.PERSISTENT)
           _ <- assertIO(
-            zookeeper.getChildren(Path.unsafeFromString("/"), false).rethrow,
+            zookeeper.getChildrenOnly(Path.unsafeFromString("/"), false).rethrow,
             Vector(Path.unsafeFromString("/testnode"))
           )
-        } yield ()
-    }
-  }
-
-  test("should return none when getData is executed for non existing node") {
-
-    zookeeper().use {
-      case (zookeeper, _) =>
-        for {
-          result <- zookeeper.getData[String](Path.unsafeFromString("/testnode"), false).rethrow
-          _      <- assertIO(result.pure[IO], none)
         } yield ()
     }
   }
@@ -120,7 +109,7 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
         for {
           (_, stats) <- zookeeper.createEmpty(testNodePath, CreateMode.PERSISTENT).rethrow
           _          <- zookeeper.delete(testNodePath, stats.getVersion).rethrow
-          _          <- assertIO(zookeeper.getChildren(Path.root, false).rethrow, Vector.empty)
+          _          <- assertIO(zookeeper.getChildrenOnly(Path.root, false).rethrow, Vector.empty)
         } yield ()
     }
   }
@@ -205,7 +194,7 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
         for {
 
           _     <- paths.map(zookeeper.createEmpty(_, CreateMode.PERSISTENT_SEQUENTIAL).rethrow).sequence
-          nodes <- zookeeper.getChildren(Path.root, false).rethrow
+          nodes <- zookeeper.getChildrenOnly(Path.root, false).rethrow
           _     <- assertIO(nodes.flatMap(_.sequential).size.pure[IO], 3)
           _ <- assertIO(
             nodes.filter(_.sequential.isDefined).sortBy(_.sequential.get).map(_.name).pure[IO],
@@ -223,7 +212,7 @@ class ZookeeperActionsSuite extends CatsEffectSuite {
           deferred <- Deferred[IO, WatchedEvent]
           watcher = Watcher.instance(deferred.complete(_).void)
           _         <- zookeeper.createEmpty(testNodePath, CreateMode.PERSISTENT).rethrow
-          (_, stat) <- zookeeper.unsafeGetData[String](testNodePath, watcher).rethrow
+          (_, stat) <- zookeeper.unsafeGetDataM[String, IO](testNodePath, watcher).rethrow
           _         <- assertIO(deferred.tryGet, none)
           _         <- zookeeper.delete(testNodePath, stat.getVersion)
           event     <- deferred.get
