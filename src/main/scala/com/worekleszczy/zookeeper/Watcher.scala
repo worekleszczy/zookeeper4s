@@ -5,6 +5,11 @@ import org.apache.zookeeper.WatchedEvent
 
 trait Watcher[F[_]] {
   def process(event: WatchedEvent): F[Unit]
+
+  final def filterWatch(implicit applicative: Applicative[F]): Watcher[F] = {
+    case event if event.getType.getIntValue >= 5 => applicative.unit
+    case other                                   => process(other)
+  }
 }
 
 object Watcher {
