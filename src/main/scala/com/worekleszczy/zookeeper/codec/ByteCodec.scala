@@ -38,6 +38,18 @@ object ByteCodec {
     }
   }
 
+  implicit val intCodec: ByteCodec[Int] = new ByteCodec[Int] {
+    def encode(value: Int): Try[Array[Byte]] = utf8StringCodec.encode(String.valueOf(value))
+
+    def decode(raw: Array[Byte]): Try[Int] = utf8StringCodec.decode(raw).flatMap(str => Try(str.toInt))
+  }
+
+  implicit val longCoded: ByteCodec[Long] = new ByteCodec[Long] {
+    def encode(value: Long): Try[Array[Byte]] = utf8StringCodec.encode(String.valueOf(value))
+
+    def decode(raw: Array[Byte]): Try[Long] = utf8StringCodec.decode(raw).flatMap(str => Try(str.toLong))
+  }
+
   def apply[T: ByteCodec]: ByteCodec[T] = implicitly[ByteCodec[T]]
 
   object syntax {
