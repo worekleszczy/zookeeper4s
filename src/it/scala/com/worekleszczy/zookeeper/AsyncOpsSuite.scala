@@ -3,6 +3,8 @@ package com.worekleszczy.zookeeper
 import cats.effect.std.{Dispatcher, UUIDGen}
 import cats.effect.syntax.all._
 import cats.effect.{IO, Resource}
+import cats.syntax.applicative._
+import cats.syntax.monadError._
 import com.worekleszczy.zookeeper.Zookeeper.{noopWatcher, ZookeeperLive}
 import com.worekleszczy.zookeeper.config.ZookeeperConfig
 import com.worekleszczy.zookeeper.model.Path
@@ -78,7 +80,7 @@ class AsyncOpsSuite extends CatsEffectSuite {
   test("return right away if node exists") {
 
     zookeeper().use {
-      case (zookeeper, id) =>
+      case (zookeeper, _) =>
         val lockNode = Path.unsafeFromString("/testnode")
         val nodeRaw  = "alamakotaakotnielubiali"
 
@@ -90,6 +92,44 @@ class AsyncOpsSuite extends CatsEffectSuite {
             zookeeper.unsafeGetDataBlock[String](lockNode).timeout(1.second),
             nodeRaw
           )
+        } yield ()
+    }
+  }
+
+  test("create node when it doesn't exists") {
+
+    zookeeper().use {
+      case (zookeeper, _) =>
+        val lockNode = Path.unsafeFromString("/testnode")
+        val nodeRaw  = "alamakotaakotnielubiali"
+
+        for {
+          (path, stat) <-
+            zookeeper
+              .createEncodeIfNotExists(lockNode, nodeRaw, CreateMode.PERSISTENT)
+              .rethrow
+
+          _ <- assertIO(stat.getVersion.pure[IO], 0)
+          _ <- assertIO(path.pure[IO], lockNode)
+        } yield ()
+    }
+  }
+
+  test("don't update a node when it was already created") {
+
+    zookeeper().use {
+      case (zookeeper, _) =>
+        val lockNode = Path.unsafeFromString("/testnode")
+        val nodeRaw  = "alamakotaakotnielubiali"
+
+        for {
+          _ <- zookeeper.createEncode(lockNode, nodeRaw, CreateMode.PERSISTENT).rethrow
+          (path, stat) <-
+            zookeeper
+              .createEncodeIfNotExists(lockNode, nodeRaw, CreateMode.PERSISTENT)
+              .rethrow
+          _ <- assertIO(stat.getVersion.pure[IO], 0)
+          _ <- assertIO(path.pure[IO], lockNode)
         } yield ()
     }
   }
